@@ -4,6 +4,7 @@
 
 import {AffineTransform} from "./affine"
 import {isString, isNumber} from "./types"
+import {dict} from "./object"
 import type {Random} from "./random"
 import {random} from "./random"
 import {float32_epsilon} from "./math"
@@ -78,33 +79,39 @@ const namedEntities = createNamedToNumberedLookup(
   "80f,rlm,80j,ndash,80k,mdash,80o,lsquo,80p,rsquo,80q,sbquo,80s,ldquo,80t,rdquo,80u,bdquo,810,dagger," +
   "811,Dagger,81g,permil,81p,lsaquo,81q,rsaquo,85c,euro", 32)
 
-type Style = {
+type Style<T> = {
   svgAttr?: string
-  canvas: unknown
+  canvas: T
   svg?: unknown
   apply?: string
 }
 
 type StyleAttr =
-  "strokeStyle" |
-  "fillStyle" |
-  "lineCap" |
-  "lineJoin" |
-  "miterLimit" |
-  "lineWidth" |
-  "globalAlpha" |
-  "font" |
-  "shadowColor" |
-  "shadowOffsetX" |
-  "shadowOffsetY" |
-  "shadowBlur" |
-  "fontKerning" |
-  "textAlign" |
-  "textBaseline" |
-  "lineDash" |
-  "lineDashOffset"
+  | "strokeStyle"
+  | "fillStyle"
+  | "lineCap"
+  | "lineJoin"
+  | "miterLimit"
+  | "lineWidth"
+  | "globalAlpha"
+  | "shadowColor"
+  | "shadowOffsetX"
+  | "shadowOffsetY"
+  | "shadowBlur"
+  | "lineDash"
+  | "lineDashOffset"
+  | "direction"
+  | "font"
+  | "fontKerning"
+  | "fontStretch"
+  | "fontVariantCaps"
+  | "letterSpacing"
+  | "textAlign"
+  | "textBaseline"
+  | "textRendering"
+  | "wordSpacing"
 
-type StyleState = {[key in StyleAttr]: Style}
+type StyleState = {[K in StyleAttr & keyof BaseCanvasRenderingContext2D]: Style<BaseCanvasRenderingContext2D[K]>} & {lineDash: Style<number[]>}
 
 // Some basic mappings for attributes and default values.
 const STYLES: StyleState = {
@@ -150,10 +157,6 @@ const STYLES: StyleState = {
     svg: 1,
     apply: "fill stroke",
   },
-  font: {
-    // font converts to multiple svg attributes, there is custom logic for this
-    canvas: "10px sans-serif",
-  },
   shadowColor: {
     canvas: "#000000",
   },
@@ -166,15 +169,6 @@ const STYLES: StyleState = {
   shadowBlur: {
     canvas: 0,
   },
-  fontKerning: {
-    canvas: "auto",
-  },
-  textAlign: {
-    canvas: "start",
-  },
-  textBaseline: {
-    canvas: "alphabetic",
-  },
   lineDash: {
     svgAttr: "stroke-dasharray",
     canvas: [],
@@ -186,6 +180,37 @@ const STYLES: StyleState = {
     canvas: 0,
     svg: 0,
     apply: "stroke",
+  },
+  direction: {
+    canvas: "inherit",
+  },
+  font: {
+    // font converts to multiple svg attributes, there is custom logic for this
+    canvas: "10px sans-serif",
+  },
+  fontKerning: {
+    canvas: "auto",
+  },
+  fontStretch: {
+    canvas: "normal",
+  },
+  fontVariantCaps: {
+    canvas: "normal",
+  },
+  letterSpacing: {
+    canvas: "0px",
+  },
+  textAlign: {
+    canvas: "start",
+  },
+  textBaseline: {
+    canvas: "alphabetic",
+  },
+  textRendering: {
+    canvas: "auto",
+  },
+  wordSpacing: {
+    canvas: "0px",
   },
 }
 
@@ -336,20 +361,26 @@ export class SVGRenderingContext2D implements BaseCanvasRenderingContext2D {
   lineWidth: number
   globalAlpha: number = 1.0
   globalCompositeOperation: GlobalCompositeOperation // TODO: implement
-  font: string
-  direction: CanvasDirection // TODO: implement
   shadowColor: string
   shadowOffsetX: number
   shadowOffsetY: number
   shadowBlur: number
-  fontKerning: CanvasFontKerning
-  textAlign: CanvasTextAlign
-  textBaseline: CanvasTextBaseline
   lineDash: string | number[] | null
   lineDashOffset: number
   filter: string // TODO: implement
   imageSmoothingEnabled: boolean // TODO: implement
   imageSmoothingQuality: ImageSmoothingQuality // TODO: implement
+
+  direction: CanvasDirection // TODO
+  font: string
+  fontKerning: CanvasFontKerning // TODO
+  fontStretch: CanvasFontStretch // TODO
+  fontVariantCaps: CanvasFontVariantCaps // TODO
+  letterSpacing: string // TODO
+  textAlign: CanvasTextAlign
+  textBaseline: CanvasTextBaseline
+  textRendering: CanvasTextRendering // TODO
+  wordSpacing: string // TODO
 
   private _width: number
   private _height: number
@@ -434,23 +465,17 @@ export class SVGRenderingContext2D implements BaseCanvasRenderingContext2D {
    */
   __setDefaultStyles(): void {
     // default 2d canvas context properties see:http://www.w3.org/TR/2dcontext/
-    const keys = Object.keys(STYLES) as StyleAttr[]
-    const self = this as any
-    for (let i=0; i<keys.length; i++) {
-      const key = keys[i]
-      self[key] = STYLES[key].canvas
+    for (const [key, val] of dict(STYLES)) {
+      this[key] = val.canvas
     }
   }
 
   /**
    * Applies styles on restore
    */
-  __applyStyleState(styleState: StyleState): void {
-    const keys = Object.keys(styleState) as StyleAttr[]
-    const self = this as any
-    for (let i=0; i<keys.length; i++) {
-      const key = keys[i]
-      self[key] = styleState[key]
+  __applyStyleState(style_state: StyleState): void {
+    for (const [key, val] of dict(style_state)) {
+      this[key] = val
     }
   }
 
@@ -458,13 +483,11 @@ export class SVGRenderingContext2D implements BaseCanvasRenderingContext2D {
    * Gets the current style state
    */
   __getStyleState(): StyleState {
-    const keys = Object.keys(STYLES) as StyleAttr[]
-    const styleState = {} as any
-    for (let i=0; i<keys.length; i++) {
-      const key = keys[i]
-      styleState[key] = this[key]
+    const style_state = {} as any
+    for (const [key, _val] of dict(STYLES)) {
+      style_state[key] = this[key]
     }
-    return styleState
+    return style_state
   }
 
   /**
@@ -483,10 +506,8 @@ export class SVGRenderingContext2D implements BaseCanvasRenderingContext2D {
     }
     */
 
-    const keys = Object.keys(STYLES) as StyleAttr[]
-    for (let i = 0; i < keys.length; i++) {
-      const style = STYLES[keys[i]]
-      const value = this[keys[i]]
+    for (const [key, style] of dict(STYLES)) {
+      const value = this[key]
       if (style.apply != null && style.apply.includes(type)) {
         if (value instanceof CanvasPattern) {
           for (const def of [...value.__ctx.__defs.childNodes]) {
@@ -512,7 +533,7 @@ export class SVGRenderingContext2D implements BaseCanvasRenderingContext2D {
             currentElement.setAttribute(`${style.svgAttr}-opacity`, `${opacity}`)
           } else {
             let attr = style.svgAttr!
-            if (keys[i] === "globalAlpha") {
+            if (key === "globalAlpha") {
               attr = `${type}-${style.svgAttr}`
               if (currentElement.getAttribute(attr) != null) {
                 // fill-opacity or stroke-opacity has already been set by stroke or fill.
